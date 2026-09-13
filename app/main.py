@@ -415,15 +415,50 @@ def transcribe_video(video_id: str, source: Path) -> None:
             connection.execute("UPDATE transcripts SET status='failed', error=?, updated_at=? WHERE video_id=?", (hint, now(), video_id))
 
 
+_summarizer_pipeline = None
+
+
+def get_summarizer():
+    global _summarizer_pipeline
+    if _summarizer_pipeline is None:
+        from transformers import pipeline
+        # Use t5-small for lightweight, CPU-friendly abstractive summarization
+        _summarizer_pipeline = pipeline("summarization", model="t5-small")
+    return _summarizer_pipeline
+
+
 def summarize_text(text: str, maximum_sentences: int) -> str:
-    sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", text) if item.strip()]
-    if not sentences:
+    if not text.strip():
         raise HTTPException(status_code=422, detail="Transcript has no text to summarize")
-    words = re.findall(r"[a-zA-Z]{3,}", text.lower())
-    frequency = {word: words.count(word) for word in set(words)}
-    scored = [(sum(frequency.get(word, 0) for word in re.findall(r"[a-zA-Z]{3,}", sentence.lower())), index, sentence) for index, sentence in enumerate(sentences)]
-    picked = sorted(sorted(scored, reverse=True)[:min(maximum_sentences, len(sentences))], key=lambda item: item[1])
-    return " ".join(item[2] for item in picked)
+    
+    word_count = len(text.split())
+    if word_count < 10:
+        return text  # Too short to summarize
+    
+    # Define token length constraints for T5 based on the requested summary detail level
+    if maximum_sentences <= 3:
+        max_length = min(50, word_count)
+        min_length = min(15, word_count // 2)
+    else:
+        max_length = min(150, word_count)
+        min_length = min(50, word_count // 2)
+        
+    try:
+        summarizer = get_summarizer()
+        # Truncate to first 450 words to prevent exceeding T5's 512 max input length limit
+        truncated_text = " ".join(text.split()[:450])
+        result = summarizer(truncated_text, max_length=max_length, min_length=min_length, do_sample=False)
+        return result[0]["summary_text"].strip()
+    except Exception:
+        # Fallback to the original extractive word-frequency algorithm if the deep learning model fails
+        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", text) if item.strip()]
+        if not sentences:
+            raise HTTPException(status_code=422, detail="Transcript has no text to summarize")
+        words = re.findall(r"[a-zA-Z]{3,}", text.lower())
+        frequency = {word: words.count(word) for word in set(words)}
+        scored = [(sum(frequency.get(word, 0) for word in re.findall(r"[a-zA-Z]{3,}", sentence.lower())), index, sentence) for index, sentence in enumerate(sentences)]
+        picked = sorted(sorted(scored, reverse=True)[:min(maximum_sentences, len(sentences))], key=lambda item: item[1])
+        return " ".join(item[2] for item in picked)
 
 
 class TranscriptUpdate(BaseModel):
