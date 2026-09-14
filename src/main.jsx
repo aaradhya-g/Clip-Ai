@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
+import LandingPage from './LandingPage';
 
-const API = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ? 'http://localhost:8000/api'
-  : 'https://clipmind-backend-r863.onrender.com/api';
+const API = import.meta.env.VITE_API_URL || 'https://clipmind-backend-r863.onrender.com/api';
 
 const ROLES = ['creator', 'learner', 'educator', 'admin'];
 
@@ -30,10 +29,30 @@ function getSafeStoredToken() {
 }
 
 function App() {
+  const [currentRoute, setCurrentRoute] = useState(window.location.pathname);
   const [token, setToken] = useState(getSafeStoredToken);
   const [user, setUser] = useState(getSafeStoredUser);
   const [authMode, setAuthMode] = useState('login');
   const [currentTab, setCurrentTab] = useState('workspace'); // workspace, analytics, bookmarks, educator, admin
+  
+  useEffect(() => {
+    const handlePopState = () => setCurrentRoute(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Keep Render server awake as long as the frontend is open
+  useEffect(() => {
+    const keepAlive = setInterval(() => {
+      fetch(`${API}/docs`).catch(() => {}); // Ping docs endpoint silently
+    }, 14 * 60 * 1000); // 14 minutes
+    return () => clearInterval(keepAlive);
+  }, []);
+
+  const navigateTo = (path) => {
+    window.history.pushState({}, '', path);
+    setCurrentRoute(path);
+  };
   
   // Data state
   const [videos, setVideos] = useState([]);
@@ -60,6 +79,21 @@ function App() {
   const [learnerAnalytics, setLearnerAnalytics] = useState(null);
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
+
+  // Polling for video processing and AI updates
+  useEffect(() => {
+    if (!token) return;
+    const interval = setInterval(() => {
+      if (currentTab === 'workspace') {
+        loadVideos();
+      }
+      if (selectedVideo) {
+        // Poll selected video deeper insights transparently
+        loadSelectedVideoData(selectedVideo.id);
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [token, currentTab, selectedVideo]);
   
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -178,6 +212,7 @@ function App() {
         localStorage.setItem('clipmind_user', JSON.stringify(res.user));
         setUser(res.user);
         setNotice(`Welcome, ${res.user.name || res.user.email || 'User'}!`);
+        navigateTo('/dashboard');
       }
     } catch (e) {
       setNotice(e.message);
@@ -479,37 +514,44 @@ function App() {
   }
 
   // ==========================================
+  // ROUTING VIEW RENDER
+  // ==========================================
+  if (currentRoute === '/') {
+    return <LandingPage onGetStarted={() => navigateTo('/auth')} />;
+  }
+
+  // ==========================================
   // AUTH VIEW (LOGIN & REGISTER)
   // ==========================================
-  if (!user) {
+  if (!user || currentRoute === '/auth') {
     return (
-      <main className="auth-wrapper">
-        <div className="auth-card">
-          <div className="auth-header">
-            <div className="logo-badge">⚡ CLIPMIND AI • VIDEO INTELLIGENCE</div>
-            <h1>ClipMind AI</h1>
-            <p>Video Intelligence, Key Moments Detection & Analytics Platform</p>
+      <main className="g-auth-wrapper">
+        <button className="g-back-btn" onClick={() => navigateTo('/')}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+
+        <div className="g-auth-card">
+          <div className="g-auth-header">
+            <h2>ClipMind AI</h2>
+            <p>Sign in to your workspace</p>
           </div>
 
-          <div className="auth-tabs">
-            <button className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Sign in</button>
-            <button className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Create account</button>
-          </div>
-
-          <form onSubmit={handleAuth}>
-            <div className="form-group">
+          <form className="g-auth-form" onSubmit={handleAuth}>
+            <div className="g-input-group">
+              <input name="email" type="email" placeholder=" " required />
               <label>Email Address</label>
-              <input name="email" type="email" placeholder="you@example.com" required />
             </div>
 
             {authMode === 'register' && (
               <>
-                <div className="form-group">
+                <div className="g-input-group">
+                  <input name="name" placeholder=" " minLength={2} required />
                   <label>Full Name</label>
-                  <input name="name" placeholder="Aaradhya Gupta" minLength={2} required />
                 </div>
-                <div className="form-group">
-                  <label>Account Role</label>
+                <div className="g-input-group">
                   <select name="role">
                     {ROLES.map(r => (
                       <option key={r} value={r}>
@@ -521,17 +563,26 @@ function App() {
               </>
             )}
 
-            <div className="form-group">
+            <div className="g-input-group">
+              <input name="password" type="password" placeholder=" " minLength={8} required />
               <label>Password</label>
-              <input name="password" type="password" placeholder="••••••••" minLength={8} required />
             </div>
 
-            <button className="primary" style={{ width: '100%', marginTop: '8px' }} disabled={busy}>
-              {busy ? 'Processing...' : authMode === 'login' ? 'Sign In to Workspace' : 'Create Account'}
-            </button>
-          </form>
+            {notice && <p className="notice" style={{ marginTop: '8px', textAlign: 'center', color: 'var(--accent-rose)' }}>{notice}</p>}
 
-          {notice && <p className="notice" style={{ marginTop: '16px', textAlign: 'center' }}>{notice}</p>}
+            <div className="g-auth-actions">
+              <button 
+                type="button" 
+                className="g-btn-text" 
+                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+              >
+                {authMode === 'login' ? 'Create account' : 'Sign in instead'}
+              </button>
+              <button className="g-btn-primary" disabled={busy}>
+                {busy ? 'Processing...' : 'Next'}
+              </button>
+            </div>
+          </form>
         </div>
       </main>
     );
@@ -553,46 +604,58 @@ function App() {
   // ==========================================
   // MAIN APP DASHBOARD & HUBS
   // ==========================================
+
   return (
     <div className="app-container">
-      {/* Top Navigation */}
-      <header className="navbar">
+      {/* Sidebar Navigation */}
+      <nav className="sidebar">
         <div className="brand">
-          <div className="brand-icon">✨</div>
+          <div className="brand-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+          </div>
           <div>
-            <h2>ClipMind AI</h2>
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>AI VIDEO SUMMARIZER & INTELLIGENCE</p>
+            <h2>ClipAI</h2>
+            <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Video Intelligence</p>
           </div>
         </div>
 
-        <nav className="nav-links">
+        <div className="nav-links">
+          <button onClick={() => navigateTo('/')} style={{ marginBottom: '16px', color: 'var(--text-muted)' }}>
+            ← Back To Home
+          </button>
           <button className={currentTab === 'workspace' ? 'active' : ''} onClick={() => setCurrentTab('workspace')}>
-            🎬 Workspace
+            Workspace
           </button>
           <button className={currentTab === 'analytics' ? 'active' : ''} onClick={() => setCurrentTab('analytics')}>
-            📊 Analytics & Insights
+            Analytics
           </button>
           <button className={currentTab === 'bookmarks' ? 'active' : ''} onClick={() => setCurrentTab('bookmarks')}>
-            🔖 Learner Hub ({bookmarks.length})
+            Bookmarks ({bookmarks.length})
           </button>
           {['educator', 'admin'].includes(user.role) && (
             <button className={currentTab === 'educator' ? 'active' : ''} onClick={() => setCurrentTab('educator')}>
-              🎓 Educator Hub
+              Educator
             </button>
           )}
           {user.role === 'admin' && (
             <button className={currentTab === 'admin' ? 'active' : ''} onClick={() => setCurrentTab('admin')}>
-              ⚙️ Admin Console
+              Admin
             </button>
           )}
-        </nav>
+        </div>
 
         <div className="user-profile">
           <span className={`role-pill ${user.role}`}>{user.role}</span>
-          <span style={{ fontSize: '14px', fontWeight: 600 }}>{user.name}</span>
-          <button className="secondary sm" onClick={handleLogout}>Sign out</button>
+          <span style={{ fontSize: '14px', fontWeight: 500 }}>{user.name}</span>
+          <button className="secondary sm" onClick={handleLogout} style={{ marginTop: '8px' }}>Sign out</button>
         </div>
-      </header>
+      </nav>
+
+      {/* Main Content Area */}
+      <main className="main-content">
+
 
       {notice && (
         <div className="alert-banner">
@@ -607,11 +670,14 @@ function App() {
       {currentTab === 'workspace' && (
         <>
           {/* Upload Card */}
-          {canUpload && (
-            <section className="upload-card">
+          {canUpload && !selectedVideo && (
+            <section 
+              className="upload-card" 
+              style={filteredVideos.length === 0 ? { margin: '15vh auto', transform: 'translateY(-10%)' } : {}}
+            >
               <div className="upload-info">
                 <h3>Upload Video Content</h3>
-                <p>Upload lecture, tutorial, or presentation videos for FFmpeg inspection, Whisper transcription, and AI Key Moments detection.</p>
+                <p>Upload a video to analyze.</p>
               </div>
               <form className="upload-form" onSubmit={handleUpload}>
                 <input name="video" type="file" accept="video/*,.mkv" required />
@@ -683,12 +749,13 @@ function App() {
                 )}
 
                 {/* Studio Actions */}
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button className="secondary sm" onClick={refreshStudioData} disabled={busy}>🔄 Refresh Intelligence</button>
-                  <button className="secondary sm" onClick={() => downloadExport('md')}>📥 Export Report (.md)</button>
-                  <button className="secondary sm" onClick={() => downloadExport('srt')}>📥 Export Subtitles (.srt)</button>
-                  <button className="secondary sm" onClick={() => downloadExport('json')}>📥 Full JSON (.json)</button>
-                  <button className="secondary sm" onClick={() => setSelectedVideo(null)}>Close Studio</button>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button className="secondary sm" onClick={() => downloadExport('md')}>Export Report (.md)</button>
+                  <button className="secondary sm" onClick={() => downloadExport('srt')}>Export Subtitles (.srt)</button>
+                  <button className="secondary sm" onClick={() => downloadExport('json')}>Export JSON</button>
+                  <button className="icon-btn" onClick={() => setSelectedVideo(null)} aria-label="Close Studio" title="Close Studio">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
                 </div>
               </div>
 
@@ -696,22 +763,22 @@ function App() {
               <div className="inspector-pane">
                 <div className="inspector-tabs">
                   <button className={studioTab === 'moments' ? 'active' : ''} onClick={() => setStudioTab('moments')}>
-                    ⏱️ Key Moments ({keyMoments.length})
+                    Key Moments ({keyMoments.length})
                   </button>
                   <button className={studioTab === 'keywords' ? 'active' : ''} onClick={() => setStudioTab('keywords')}>
-                    🏷️ Keywords ({keywords.length})
+                    Keywords ({keywords.length})
                   </button>
                   <button className={studioTab === 'insights' ? 'active' : ''} onClick={() => setStudioTab('insights')}>
-                    📈 Content Insights
+                    Insights
                   </button>
                   <button className={studioTab === 'report' ? 'active' : ''} onClick={() => { setStudioTab('report'); if (!report) loadHighlightReport(); }}>
-                    📝 Highlight Report
+                    Report
                   </button>
                   <button className={studioTab === 'transcript' ? 'active' : ''} onClick={() => setStudioTab('transcript')}>
-                    📜 Transcript
+                    Transcript
                   </button>
                   <button className={studioTab === 'summaries' ? 'active' : ''} onClick={() => setStudioTab('summaries')}>
-                    💡 Summaries ({summaries.length})
+                    Summaries ({summaries.length})
                   </button>
                 </div>
 
@@ -733,7 +800,7 @@ function App() {
                         </div>
                         {canEditSelected && (
                           <button className="sm primary" onClick={triggerKeyMoments} disabled={busy}>
-                            {busy ? 'Analyzing...' : '⚡ Re-detect Moments'}
+                            {busy ? 'Analyzing...' : 'Re-detect Moments'}
                           </button>
                         )}
                       </div>
@@ -747,7 +814,7 @@ function App() {
                           <div className="moment-card" key={m.id}>
                             <div className="moment-header">
                               <span className="timestamp-pill" onClick={() => seekTo(m.start_time)}>
-                                ▶ {m.formatted_time}
+                                {m.formatted_time}
                               </span>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <span className={`category-tag ${m.category}`}>{m.category.replace('_', ' ')}</span>
@@ -760,7 +827,7 @@ function App() {
                               className="sm secondary" 
                               onClick={() => addBookmark('key_moment', m.label, m.summary, m.start_time, m.end_time)}
                             >
-                              🔖 Save Bookmark
+                              Save Bookmark
                             </button>
                           </div>
                         ))
@@ -861,15 +928,15 @@ function App() {
                           <h2>{report.title}</h2>
                           <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Duration: {report.formatted_duration}</p>
                           <hr />
-                          <h3>📌 Executive Summary</h3>
+                          <h3>Executive Summary</h3>
                           <p>{report.executive_summary || 'No summary available yet.'}</p>
                           <hr />
-                          <h3>💡 Key Takeaways</h3>
+                          <h3>Key Takeaways</h3>
                           <ul>
                             {report.takeaways.map((t, idx) => <li key={idx}>{t}</li>)}
                           </ul>
                           <hr />
-                          <h3>⏱️ Top Highlights</h3>
+                          <h3>Top Highlights</h3>
                           {report.top_highlights.map((h, idx) => (
                             <div key={idx} style={{ marginBottom: '8px' }}>
                               <span className="timestamp-pill" onClick={() => seekTo(h.start_time)} style={{ marginRight: '6px' }}>
@@ -929,7 +996,7 @@ function App() {
                               {searchResults.results.slice(0, 8).map((sr, idx) => (
                                 <div className="search-result-item" key={idx}>
                                   <span className="timestamp-pill" onClick={() => seekTo(sr.start)} style={{ marginRight: '8px' }}>
-                                    ▶ {sr.formatted_time}
+                                    {sr.formatted_time}
                                   </span>
                                   <span dangerouslySetInnerHTML={{ __html: sr.highlighted }} />
                                 </div>
@@ -983,7 +1050,7 @@ function App() {
                                 className="sm secondary" 
                                 onClick={() => addBookmark('summary', `${s.summary_type.toUpperCase()} Summary`, s.content)}
                               >
-                                🔖 Bookmark
+                                Bookmark
                               </button>
                             </div>
                             <p style={{ fontSize: '13px', lineHeight: 1.6, color: '#e2e8f0', whiteSpace: 'pre-line' }}>{s.content}</p>
@@ -997,26 +1064,26 @@ function App() {
             </section>
           )}
 
-          {/* Video Library Grid */}
-          <div className="section-header">
-            <h2>{user.role === 'learner' ? 'Available Video Library' : 'Your Video Workspace'}</h2>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <input 
-                placeholder="Filter videos..." 
-                value={videoFilter} 
-                onChange={e => setVideoFilter(e.target.value)}
-                style={{ padding: '6px 12px', fontSize: '13px' }}
-              />
-              <button className="secondary sm" onClick={loadVideos}>Refresh</button>
-            </div>
-          </div>
 
-          {filteredVideos.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '48px', border: '1px dashed var(--border-subtle)', borderRadius: '12px', color: 'var(--text-muted)' }}>
-              No videos found. Upload a video file above to start analyzing!
-            </div>
-          ) : (
-            <div className="video-grid">
+          {/* Video Library Grid */}
+          {/* Your Video Workspace (Grid) */}
+          {!selectedVideo && filteredVideos.length > 0 && (
+            <section className="video-list-section">
+              <div className="section-header">
+                <h2>{user.role === 'learner' ? 'Available Video Library' : 'Your Video Workspace'}</h2>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input 
+                    className="search-input" 
+                    placeholder="Filter videos..." 
+                    value={videoFilter} 
+                    onChange={e => setVideoFilter(e.target.value)}
+                    style={{ padding: '6px 12px', fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div className="video-grid">
+
               {filteredVideos.map(v => (
                 <div 
                   className={`video-card ${selectedVideo?.id === v.id ? 'selected' : ''}`} 
@@ -1027,7 +1094,7 @@ function App() {
                     {v.thumbnail_name ? (
                       <img src={`${API}/thumbnails/${v.thumbnail_name}`} alt={v.original_name} />
                     ) : (
-                      <span style={{ fontSize: '28px' }}>🎬</span>
+                      <span style={{ fontSize: '28px' }}></span>
                     )}
                   </div>
                   <div className="video-card-body">
@@ -1049,6 +1116,7 @@ function App() {
                 </div>
               ))}
             </div>
+            </section>
           )}
         </>
       )}
@@ -1232,7 +1300,7 @@ function App() {
                         }
                       }}
                     >
-                      ▶ Jump to Video Moment
+                      Jump to Video Moment
                     </button>
                   )}
                 </div>
@@ -1365,6 +1433,7 @@ function App() {
           </div>
         </section>
       )}
+      </main>
     </div>
   );
 }
