@@ -34,9 +34,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: clipmind-backend
-          property: host
-          prefix: https://
-          postfix: /api
+        value: https://clipmind-backend-j7f3.onrender.com/api
