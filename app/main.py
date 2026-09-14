@@ -191,7 +191,7 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def issue_token(user: sqlite3.Row) -> str:
-    return jwt.encode({"sub": user["id"], "role": user["role"], "exp": datetime.now(UTC) + timedelta(hours=8)}, JWT_SECRET, algorithm="HS256")
+    return jwt.encode({"sub": user["id"], "role": user["role"], "exp": datetime.now(UTC) + timedelta(days=7)}, JWT_SECRET, algorithm="HS256")
 
 
 def get_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)) -> sqlite3.Row:

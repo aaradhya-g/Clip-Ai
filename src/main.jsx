@@ -80,18 +80,18 @@ function App() {
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
 
-  // Polling for video processing and AI updates
+  // Polling for video processing and AI updates (30s interval to be gentle on free-tier)
   useEffect(() => {
     if (!token) return;
     const interval = setInterval(() => {
       if (currentTab === 'workspace') {
         loadVideos();
       }
-      if (selectedVideo) {
-        // Poll selected video deeper insights transparently
+      // Only poll selected video data if it's still processing
+      if (selectedVideo && selectedVideo.status === 'processing') {
         loadSelectedVideoData(selectedVideo.id);
       }
-    }, 4000);
+    }, 30000);
     return () => clearInterval(interval);
   }, [token, currentTab, selectedVideo]);
   
@@ -109,10 +109,16 @@ function App() {
         headers: { ...headers, ...(options.headers || {}) }
       });
     } catch (netErr) {
-      throw new Error(`Unable to connect to backend server. If using Render Free Tier, backend may take ~30-45s to wake up on first request. Please wait a moment and try again.`);
+      // Pure network error (backend sleeping/restarting) — do NOT log out, just fail silently
+      throw new Error(`Unable to connect to backend server. Render Free Tier may be waking up (~30-45s). Please wait a moment and try again.`);
     }
 
     if (res.status === 204) return null;
+
+    // 502/503/504 = Render gateway errors (backend restarting) — never log out for these
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw new Error('Backend is restarting. Please wait a moment and try again.');
+    }
 
     let data;
     const text = await res.text();
@@ -125,7 +131,8 @@ function App() {
       throw new Error(`Server returned status ${res.status}: ${text.slice(0, 100)}`);
     }
 
-    if (res.status === 401 && token) {
+    // Only log out on a confirmed 401 with a valid JSON body from our own API
+    if (res.status === 401 && token && data && (data.detail || data.message)) {
       localStorage.removeItem('clipmind_token');
       localStorage.removeItem('clipmind_user');
       setToken(null);
