@@ -22,6 +22,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 
+import ssl
+
+# Bypass SSL verification for model downloads (e.g. Whisper) on macOS environments
+ssl._create_default_https_context = ssl._create_unverified_context
+
 from app.analysis import (
     analyze_content_insights,
     detect_key_moments,
@@ -305,6 +310,18 @@ def process_video(video_id: str, source: Path) -> None:
     with db() as connection:
         connection.execute("UPDATE videos SET status=?, duration_seconds=?, resolution=?, thumbnail_name=?, processing_error=? WHERE id=?", (status_value, duration, resolution, thumbnail, error, video_id))
 
+    if status_value == "ready":
+        try:
+            with db() as connection:
+                existing = connection.execute("SELECT id FROM transcripts WHERE video_id=?", (video_id,)).fetchone()
+                if not existing:
+                    connection.execute("INSERT INTO transcripts VALUES (?, ?, '', NULL, 'processing', NULL, ?, ?, NULL)", (str(uuid.uuid4()), video_id, now(), now()))
+            
+            # Start transcription immediately (we are already in a background task thread)
+            transcribe_video(video_id, source)
+        except Exception as e:
+            print(f"Auto-transcription failed for {video_id}: {e}")
+
 
 @app.post("/api/videos/upload", status_code=201)
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...), user: sqlite3.Row = Depends(get_user)):
@@ -423,6 +440,16 @@ def transcribe_video(video_id: str, source: Path) -> None:
         # Auto-run key moments and keyword extraction
         run_full_nlp_analysis(video_id, content, clean_segments, dur)
 
+        # Auto-generate summaries
+        try:
+            content_short = summarize_text(content, 3)
+            content_detailed = summarize_text(content, 8)
+            with db() as connection:
+                connection.execute("INSERT INTO summaries VALUES (?, ?, ?, ?, ?) ON CONFLICT(video_id, summary_type) DO UPDATE SET content=excluded.content, created_at=excluded.created_at", (str(uuid.uuid4()), video_id, "short", content_short, now()))
+                connection.execute("INSERT INTO summaries VALUES (?, ?, ?, ?, ?) ON CONFLICT(video_id, summary_type) DO UPDATE SET content=excluded.content, created_at=excluded.created_at", (str(uuid.uuid4()), video_id, "detailed", content_detailed, now()))
+        except Exception as exc:
+            print(f"Auto-summary failed for {video_id}: {exc}")
+
     except Exception as exc:
         hint = "Install FFmpeg and run pip install -r requirements.txt." if isinstance(exc, (ImportError, FileNotFoundError)) else str(exc)[:220]
         with db() as connection:
@@ -495,7 +522,7 @@ def generate_transcript(video_id: str, background_tasks: BackgroundTasks, user: 
         if existing:
             connection.execute("UPDATE transcripts SET status='processing', error=NULL, updated_at=? WHERE video_id=?", (now(), video_id))
         else:
-            connection.execute("INSERT INTO transcripts VALUES (?, ?, '', NULL, 'processing', NULL, NULL, ?, ?)", (str(uuid.uuid4()), video_id, now(), now()))
+            connection.execute("INSERT INTO transcripts VALUES (?, ?, '', NULL, 'processing', NULL, ?, ?, NULL)", (str(uuid.uuid4()), video_id, now(), now()))
     log_activity(user["id"], "transcript_generate", video_id=video_id)
     background_tasks.add_task(transcribe_video, video_id, source)
     return {"status": "processing", "message": "Whisper transcription has started."}
@@ -533,7 +560,7 @@ def update_transcript(video_id: str, data: TranscriptUpdate, user: sqlite3.Row =
         if existing:
             connection.execute("UPDATE transcripts SET content=?, status='ready', error=NULL, segments_json=?, updated_at=? WHERE video_id=?", (clean_text, segments_json, now(), video_id))
         else:
-            connection.execute("INSERT INTO transcripts VALUES (?, ?, ?, 'manual', 'ready', NULL, ?, ?, ?)", (str(uuid.uuid4()), video_id, clean_text, segments_json, now(), now()))
+            connection.execute("INSERT INTO transcripts VALUES (?, ?, ?, 'manual', 'ready', NULL, ?, ?, ?)", (str(uuid.uuid4()), video_id, clean_text, now(), now(), segments_json))
     # Auto-run key moments and keywords for updated transcript
     run_full_nlp_analysis(video_id, clean_text, segments, video["duration_seconds"] or 60.0)
     log_activity(user["id"], "transcript_update", video_id=video_id)

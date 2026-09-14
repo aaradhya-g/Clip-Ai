@@ -4,6 +4,29 @@ ClipMind AI is an AI-powered video summarization, transcript generation, key mom
 
 ---
 
+## 🎥 Supported Video Formats & Content
+
+To get the most out of ClipAI's intelligence and insights features, please note the following video requirements:
+
+### 1. Supported File Formats
+The backend natively supports and accepts the following video file formats:
+- `.mp4` (video/mp4)
+- `.mov` (video/quicktime)
+- `.webm` (video/webm)
+- `.avi` (video/x-msvideo)
+- `.mkv` (video/x-matroska)
+
+### 2. Best Content Types for AI Insights
+Because ClipAI relies heavily on **OpenAI Whisper STT (Speech-to-Text)** to generate transcripts and NLP to detect key moments and sentiment, the AI works best on **spoken-word content**:
+- **Educational Videos & Lectures** (highly recommended)
+- **Meetings & Presentations**
+- **Podcasts & Interviews**
+- **Tutorials & Webinars**
+
+*Note: Uploading silent videos, music videos, or videos with minimal speech will result in empty transcripts and poor AI insights, as the AI primarily analyzes spoken dialogue.*
+
+---
+
 ## 🚀 Features by Milestone
 
 ### Milestone 1: Core Setup & Media Processing
