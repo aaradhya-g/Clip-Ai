@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import LandingPage from './LandingPage';
 
-const API = import.meta.env.VITE_API_URL || 'https://clipmind-backend-r863.onrender.com/api';
+const API = import.meta.env.VITE_API_URL || 'https://clipmind-backend-j7f3.onrender.com/api';
 
 const ROLES = ['creator', 'learner', 'educator', 'admin'];
 
