@@ -522,7 +522,10 @@ def generate_transcript(video_id: str, background_tasks: BackgroundTasks, user: 
         if existing:
             connection.execute("UPDATE transcripts SET status='processing', error=NULL, updated_at=? WHERE video_id=?", (now(), video_id))
         else:
-            connection.execute("INSERT INTO transcripts VALUES (?, ?, '', NULL, 'processing', NULL, ?, ?, NULL)", (str(uuid.uuid4()), video_id, now(), now()))
+            connection.execute(
+                "INSERT INTO transcripts (id, video_id, content, language, status, error, created_at, updated_at, segments_json) VALUES (:id, :video_id, '', NULL, 'processing', NULL, :created_at, :updated_at, NULL)",
+                {"id": str(uuid.uuid4()), "video_id": video_id, "created_at": now(), "updated_at": now()}
+            )
     log_activity(user["id"], "transcript_generate", video_id=video_id)
     background_tasks.add_task(transcribe_video, video_id, source)
     return {"status": "processing", "message": "Whisper transcription has started."}

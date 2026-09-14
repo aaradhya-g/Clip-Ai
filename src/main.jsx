@@ -267,9 +267,13 @@ function App() {
     setSearchResults(null);
     setTranscriptSearch('');
     
+    await loadSelectedVideoData(video.id);
+  }
+
+  async function loadSelectedVideoData(videoId) {
     try {
       // Load transcript
-      const tr = await request(`/videos/${video.id}/transcript`);
+      const tr = await request(`/videos/${videoId}/transcript`);
       setTranscript(tr);
     } catch (e) {
       // Transcript might not exist yet
@@ -277,10 +281,10 @@ function App() {
 
     try {
       const [sum, km, kw, ins] = await Promise.all([
-        request(`/videos/${video.id}/summaries`).catch(() => []),
-        request(`/videos/${video.id}/key-moments`).catch(() => []),
-        request(`/videos/${video.id}/keywords`).catch(() => []),
-        request(`/videos/${video.id}/insights`).catch(() => null)
+        request(`/videos/${videoId}/summaries`).catch(() => []),
+        request(`/videos/${videoId}/key-moments`).catch(() => []),
+        request(`/videos/${videoId}/keywords`).catch(() => []),
+        request(`/videos/${videoId}/insights`).catch(() => null)
       ]);
       setSummaries(sum);
       setKeyMoments(km);
