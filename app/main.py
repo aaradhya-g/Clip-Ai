@@ -315,7 +315,10 @@ def process_video(video_id: str, source: Path) -> None:
             with db() as connection:
                 existing = connection.execute("SELECT id FROM transcripts WHERE video_id=?", (video_id,)).fetchone()
                 if not existing:
-                    connection.execute("INSERT INTO transcripts VALUES (?, ?, '', NULL, 'processing', NULL, ?, ?, NULL)", (str(uuid.uuid4()), video_id, now(), now()))
+                    connection.execute(
+                            "INSERT INTO transcripts (id, video_id, content, language, status, error, created_at, updated_at, segments_json) VALUES (?, ?, '', NULL, 'processing', NULL, ?, ?, NULL)",
+                            (str(uuid.uuid4()), video_id, now(), now())
+                        )
             
             # Start transcription immediately (we are already in a background task thread)
             transcribe_video(video_id, source)
