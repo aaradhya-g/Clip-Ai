@@ -447,10 +447,12 @@ except Exception as exc:
 """
 
     try:
+        print(f"Starting Whisper transcription subprocess for video {video_id}...")
         proc = subprocess.run(
             [sys.executable, "-c", whisper_script],
             capture_output=True, text=True, timeout=600  # 10 min max
         )
+        print(f"Subprocess finished for video {video_id} with code {proc.returncode}")
 
         if proc.returncode != 0:
             # Try to parse error JSON from subprocess
