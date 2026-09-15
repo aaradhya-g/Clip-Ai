@@ -410,17 +410,22 @@ def run_full_nlp_analysis(video_id: str, transcript_text: str, segments: list[di
 
 def transcribe_video(video_id: str, source: Path) -> None:
     try:
-        import whisper
-        model = whisper.load_model(os.getenv("WHISPER_MODEL", "base"))
-        result = model.transcribe(str(source), fp16=False)
-        content = result.get("text", "").strip()
+        from faster_whisper import WhisperModel
+        # tiny model: ~200MB RAM vs 1.2GB for base — fits on Render free tier
+        model = WhisperModel(
+            os.getenv("WHISPER_MODEL", "tiny"),
+            device="cpu",
+            compute_type="int8"  # quantized = ~half the memory
+        )
+        segments_iter, info = model.transcribe(str(source), beam_size=5)
+        segments_list = list(segments_iter)  # consume the generator
+        content = " ".join(s.text.strip() for s in segments_list).strip()
         if not content:
             raise ValueError("Whisper returned an empty transcript")
 
-        raw_segments = result.get("segments", [])
         clean_segments = [
-            {"start": round(float(s["start"]), 2), "end": round(float(s["end"]), 2), "text": s["text"].strip()}
-            for s in raw_segments if s.get("text")
+            {"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}
+            for s in segments_list if s.text.strip()
         ]
         if not clean_segments:
             with db() as connection:
@@ -429,10 +434,11 @@ def transcribe_video(video_id: str, source: Path) -> None:
             clean_segments = extract_or_generate_segments(content, dur)
 
         segments_json = json.dumps(clean_segments)
+        language = getattr(info, "language", None)
         with db() as connection:
             connection.execute(
                 "UPDATE transcripts SET content=?, language=?, status='ready', error=NULL, segments_json=?, updated_at=? WHERE video_id=?",
-                (content, result.get("language"), segments_json, now(), video_id)
+                (content, language, segments_json, now(), video_id)
             )
             v = connection.execute("SELECT duration_seconds FROM videos WHERE id=?", (video_id,)).fetchone()
             dur = (v["duration_seconds"] or 60.0) if v else 60.0
@@ -456,50 +462,34 @@ def transcribe_video(video_id: str, source: Path) -> None:
             connection.execute("UPDATE transcripts SET status='failed', error=?, updated_at=? WHERE video_id=?", (hint, now(), video_id))
 
 
-_summarizer_pipeline = None
-
-
-def get_summarizer():
-    global _summarizer_pipeline
-    if _summarizer_pipeline is None:
-        from transformers import pipeline
-        # Use t5-small for lightweight, CPU-friendly abstractive summarization
-        _summarizer_pipeline = pipeline("summarization", model="t5-small")
-    return _summarizer_pipeline
-
-
 def summarize_text(text: str, maximum_sentences: int) -> str:
+    """Pure-Python extractive summarization — no ML model, zero extra RAM."""
     if not text.strip():
         raise HTTPException(status_code=422, detail="Transcript has no text to summarize")
-    
-    word_count = len(text.split())
-    if word_count < 10:
-        return text  # Too short to summarize
-    
-    # Define token length constraints for T5 based on the requested summary detail level
-    if maximum_sentences <= 3:
-        max_length = min(50, word_count)
-        min_length = min(15, word_count // 2)
-    else:
-        max_length = min(150, word_count)
-        min_length = min(50, word_count // 2)
-        
-    try:
-        summarizer = get_summarizer()
-        # Truncate to first 450 words to prevent exceeding T5's 512 max input length limit
-        truncated_text = " ".join(text.split()[:450])
-        result = summarizer(truncated_text, max_length=max_length, min_length=min_length, do_sample=False)
-        return result[0]["summary_text"].strip()
-    except Exception:
-        # Fallback to the original extractive word-frequency algorithm if the deep learning model fails
-        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", text) if item.strip()]
-        if not sentences:
-            raise HTTPException(status_code=422, detail="Transcript has no text to summarize")
-        words = re.findall(r"[a-zA-Z]{3,}", text.lower())
-        frequency = {word: words.count(word) for word in set(words)}
-        scored = [(sum(frequency.get(word, 0) for word in re.findall(r"[a-zA-Z]{3,}", sentence.lower())), index, sentence) for index, sentence in enumerate(sentences)]
-        picked = sorted(sorted(scored, reverse=True)[:min(maximum_sentences, len(sentences))], key=lambda item: item[1])
-        return " ".join(item[2] for item in picked)
+    sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", text) if item.strip()]
+    if not sentences:
+        raise HTTPException(status_code=422, detail="Transcript has no text to summarize")
+    if len(text.split()) < 10:
+        return text
+    # Score each sentence by the frequency of its words (stop-word-free)
+    STOPWORDS = {"the","a","an","is","are","was","were","be","been","being","have",
+                 "has","had","do","does","did","will","would","could","should","may",
+                 "might","shall","can","need","dare","ought","used","to","of","in",
+                 "on","at","by","for","with","about","against","between","into","through",
+                 "during","before","after","above","below","from","up","down","out",
+                 "off","over","under","again","further","then","once","and","but","or",
+                 "nor","so","yet","both","either","neither","not","only","own","same",
+                 "than","too","very","just","it","its","this","that","these","those"}
+    words = [w for w in re.findall(r"[a-zA-Z]{3,}", text.lower()) if w not in STOPWORDS]
+    frequency: dict[str, int] = {}
+    for w in words:
+        frequency[w] = frequency.get(w, 0) + 1
+    scored = [
+        (sum(frequency.get(w, 0) for w in re.findall(r"[a-zA-Z]{3,}", s.lower()) if w not in STOPWORDS), i, s)
+        for i, s in enumerate(sentences)
+    ]
+    picked = sorted(sorted(scored, reverse=True)[:min(maximum_sentences, len(sentences))], key=lambda x: x[1])
+    return " ".join(item[2] for item in picked)
 
 
 class TranscriptUpdate(BaseModel):
