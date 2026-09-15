@@ -412,24 +412,61 @@ def run_full_nlp_analysis(video_id: str, transcript_text: str, segments: list[di
 
 
 def transcribe_video(video_id: str, source: Path) -> None:
+    """Run Whisper in an isolated subprocess so the main server process never
+    loads the model into memory. The subprocess exits after transcription,
+    freeing all RAM — critical for Render's 512MB free tier."""
+    import sys
+    import tempfile
+
+    whisper_script = f"""
+import sys, json, os
+os.environ.setdefault("HF_HOME", os.getenv("HF_HOME", "/app/.cache"))
+try:
+    from faster_whisper import WhisperModel
+    model = WhisperModel(
+        os.getenv("WHISPER_MODEL", "tiny"),
+        device="cpu",
+        compute_type="int8"
+    )
+    segments_iter, info = model.transcribe("{str(source).replace(chr(92), '/')}", beam_size=5)
+    segments_list = list(segments_iter)
+    result = {{
+        "text": " ".join(s.text.strip() for s in segments_list).strip(),
+        "language": getattr(info, "language", None),
+        "segments": [
+            {{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}}
+            for s in segments_list if s.text.strip()
+        ]
+    }}
+    print(json.dumps(result))
+    sys.exit(0)
+except Exception as exc:
+    import traceback
+    print(json.dumps({{"error": str(exc), "trace": traceback.format_exc()[-500:]}}))
+    sys.exit(1)
+"""
+
     try:
-        from faster_whisper import WhisperModel
-        # tiny model: ~200MB RAM vs 1.2GB for base — fits on Render free tier
-        model = WhisperModel(
-            os.getenv("WHISPER_MODEL", "tiny"),
-            device="cpu",
-            compute_type="int8"  # quantized = ~half the memory
+        proc = subprocess.run(
+            [sys.executable, "-c", whisper_script],
+            capture_output=True, text=True, timeout=600  # 10 min max
         )
-        segments_iter, info = model.transcribe(str(source), beam_size=5)
-        segments_list = list(segments_iter)  # consume the generator
-        content = " ".join(s.text.strip() for s in segments_list).strip()
+
+        if proc.returncode != 0:
+            # Try to parse error JSON from subprocess
+            try:
+                err_data = json.loads(proc.stdout)
+                raise RuntimeError(err_data.get("error", proc.stderr[:300]))
+            except (json.JSONDecodeError, ValueError):
+                raise RuntimeError(proc.stderr[:300] or "Whisper subprocess exited with error")
+
+        data = json.loads(proc.stdout)
+        content = data.get("text", "").strip()
         if not content:
             raise ValueError("Whisper returned an empty transcript")
 
-        clean_segments = [
-            {"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()}
-            for s in segments_list if s.text.strip()
-        ]
+        raw_segments = data.get("segments", [])
+        clean_segments = raw_segments if raw_segments else []
         if not clean_segments:
             with db() as connection:
                 v = connection.execute("SELECT duration_seconds FROM videos WHERE id=?", (video_id,)).fetchone()
