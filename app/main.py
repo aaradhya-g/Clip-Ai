@@ -460,7 +460,13 @@ def transcribe_video(video_id: str, source: Path) -> None:
             print(f"Auto-summary failed for {video_id}: {exc}")
 
     except Exception as exc:
-        hint = "Install FFmpeg and run pip install -r requirements.txt." if isinstance(exc, (ImportError, FileNotFoundError)) else str(exc)[:220]
+        if isinstance(exc, ImportError):
+            hint = f"faster-whisper import failed: {exc}. Check that libgomp1 is installed in the Docker container."
+        elif isinstance(exc, FileNotFoundError):
+            hint = f"File not found during transcription: {exc}"
+        else:
+            hint = str(exc)[:300]
+        print(f"Transcription error for {video_id}: {hint}")
         with db() as connection:
             connection.execute("UPDATE transcripts SET status='failed', error=?, updated_at=? WHERE video_id=?", (hint, now(), video_id))
 
